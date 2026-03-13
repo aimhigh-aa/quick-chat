@@ -139,7 +139,7 @@ export function AppSidebar() {
                       size="icon"
                       onClick={(e) => handleDeleteChat(e, chat.id)}
                       // active:translate-y-0 覆盖 Button 默认的 active:translate-y-px，防止点击时下移
-                      className="absolute right-2 top-1/2 -translate-y-1/2 h-7 w-7 flex items-center justify-center active:translate-y-[-20%]"
+                      className="absolute right-2 top-1/2 -translate-y-1/2 h-7 w-7 flex items-center justify-center active:translate-y-[-40%]"
                     >
                       <Trash2 className="size-4 text-muted-foreground hover:text-destructive" />
                     </Button>
