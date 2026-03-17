@@ -1,5 +1,5 @@
-import { create } from 'zustand'
-import { immer } from 'zustand/middleware/immer'
+import { create } from "zustand";
+import { immer } from "zustand/middleware/immer";
 
 /**
  * Chat 数据接口定义
@@ -8,19 +8,37 @@ import { immer } from 'zustand/middleware/immer'
  * @property createdAt - 创建时间戳
  */
 export interface Chat {
-  id: string
-  title: string
-  createdAt: number
+  id: string;
+  title: string;
+  createdAt: number;
+}
+
+/**
+ * Message 数据接口定义
+ * @property id - 唯一标识符
+ * @property chatId - 所属聊天的 ID
+ * @property role - 发送者角色：user 或 assistant
+ * @property content - 消息内容
+ * @property createdAt - 创建时间戳
+ */
+export interface Message {
+  id: string;
+  chatId: string;
+  role: "user" | "assistant";
+  content: string;
+  createdAt: number;
 }
 
 /**
  * Chat 状态定义
  * @property chats - 聊天列表数组
+ * @property messages - 消息列表数组
  * @property activeChatId - 当前活跃聊天的 ID
  */
 interface ChatState {
-  chats: Chat[]
-  activeChatId: string | null
+  chats: Chat[];
+  messages: Message[];
+  activeChatId: string | null;
 }
 
 /**
@@ -28,13 +46,23 @@ interface ChatState {
  */
 interface ChatActions {
   /** 添加新聊天，可传入部分属性进行自定义 */
-  addChat: (chat?: Partial<Chat>) => void
+  addChat: (chat?: Partial<Chat>) => void;
   /** 设置当前活跃聊天 */
-  setActiveChat: (id: string) => void
+  setActiveChat: (id: string) => void;
   /** 删除指定 ID 的聊天 */
-  deleteChat: (id: string) => void
+  deleteChat: (id: string) => void;
   /** 更新聊天标题 */
-  updateChatTitle: (id: string, title: string) => void
+  updateChatTitle: (id: string, title: string) => void;
+  /** 添加新消息到指定聊天 */
+  addMessage: (
+    chatId: string,
+    role: Message["role"],
+    content: string,
+  ) => void;
+  /** 获取指定聊天的消息列表 */
+  getMessagesByChatId: (chatId: string) => Message[];
+  /** 删除指定聊天的所有消息 */
+  clearMessages: (chatId: string) => void;
 }
 
 /**
@@ -43,9 +71,10 @@ interface ChatActions {
  * 仅存储必须全局共享的聊天列表和当前活跃聊天 ID（符合编码规范第 3 条）
  */
 export const useChatStore = create<ChatState & ChatActions>()(
-  immer((set) => ({
+  immer((set, get) => ({
     // 初始状态
     chats: [],
+    messages: [],
     activeChatId: null,
 
     /**
@@ -58,11 +87,11 @@ export const useChatStore = create<ChatState & ChatActions>()(
           id: chat?.id || crypto.randomUUID(),
           title: chat?.title || `New Chat ${state.chats.length + 1}`,
           createdAt: chat?.createdAt || Date.now(),
-        }
+        };
         // 新聊天插入到列表头部
-        state.chats.unshift(newChat)
+        state.chats.unshift(newChat);
         // 自动设为当前活跃聊天
-        state.activeChatId = newChat.id
+        state.activeChatId = newChat.id;
       }),
 
     /**
@@ -70,7 +99,7 @@ export const useChatStore = create<ChatState & ChatActions>()(
      */
     setActiveChat: (id) =>
       set((state) => {
-        state.activeChatId = id
+        state.activeChatId = id;
       }),
 
     /**
@@ -79,9 +108,9 @@ export const useChatStore = create<ChatState & ChatActions>()(
      */
     deleteChat: (id) =>
       set((state) => {
-        state.chats = state.chats.filter((chat) => chat.id !== id)
+        state.chats = state.chats.filter((chat) => chat.id !== id);
         if (state.activeChatId === id) {
-          state.activeChatId = state.chats[0]?.id || null
+          state.activeChatId = state.chats[0]?.id || null;
         }
       }),
 
@@ -90,10 +119,50 @@ export const useChatStore = create<ChatState & ChatActions>()(
      */
     updateChatTitle: (id, title) =>
       set((state) => {
-        const chat = state.chats.find((c) => c.id === id)
+        const chat = state.chats.find((c) => c.id === id);
         if (chat) {
-          chat.title = title
+          chat.title = title;
         }
       }),
-  }))
-)
+
+    /**
+     * 添加新消息到指定聊天
+     * @param chatId - 所属聊天的 ID
+     * @param role - 发送者角色：user 或 assistant
+     * @param content - 消息内容
+     */
+    addMessage: (chatId, role, content) =>
+      set((state) => {
+        const newMessage: Message = {
+          id: crypto.randomUUID(),
+          chatId,
+          role,
+          content,
+          createdAt: Date.now(),
+        };
+        state.messages.push(newMessage);
+      }),
+
+    /**
+     * 获取指定聊天的消息列表
+     * @param chatId - 聊天 ID
+     * @returns 该聊天的消息数组，按时间排序
+     */
+    getMessagesByChatId: (chatId: string): Message[] => {
+      return get()
+        .messages.filter((msg: Message) => msg.chatId === chatId)
+        .sort((a: Message, b: Message) => a.createdAt - b.createdAt);
+    },
+
+    /**
+     * 删除指定聊天的所有消息
+     * @param chatId - 聊天 ID
+     */
+    clearMessages: (chatId: string) =>
+      set((state) => {
+        state.messages = state.messages.filter(
+          (msg: Message) => msg.chatId !== chatId,
+        );
+      }),
+  })),
+);

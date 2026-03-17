@@ -79,12 +79,12 @@ export const useChatStore = create<ChatState>((set) => ({
 禁止表情包: UI 文字描述和代码注释中禁止使用 ✅, ❌, 🚀 等表情。
 
 
-5.Skills 调用与工程自动化
+6. Skills 调用与工程自动化
 规则: 优先使用本地 Skills 路径下的工具进行代码生成、页面生成，重构和数据库迁移，保持工程一致
 性。本地skills文件地址：C:\Users\12544\.claude\skills
 
 
-6. 深度思考：编码前的“逻辑拆解”
+7. 深度思考：编码前的“逻辑拆解”
 要求： 在输出任何正式代码块之前，必须先以有序列表的形式陈述你的实现思路。
 
 功能理解： 简述你对当前需求的理解。
@@ -95,7 +95,7 @@ export const useChatStore = create<ChatState>((set) => ({
 
 步骤分解： 将编码过程拆分为 1, 2, 3 步，让我能预知代码的结构。
 
-7. 代码注释：核心逻辑的“自解释”
+8. 代码注释：核心逻辑的“自解释”
 要求： 代码不仅仅是运行的工具，更是沟通的媒介。请为函数和关键代码段添加注释：
 
 函数级注释 (JSDoc)： 使用标准格式说明函数的功能、参数类型 (@param) 和返回值 (@returns)。
@@ -103,3 +103,10 @@ export const useChatStore = create<ChatState>((set) => ({
 关键逻辑注释： 在复杂的条件判断、特殊的样式计算（如 cn() 中的逻辑）或副作用 (useEffect) 旁添加单行简短说明。
 
 样式说明： 对于特殊的 Tailwind 类名组合（如你之前关心的 rounded-full 药丸形状），请注明其视觉目的。
+
+9. 组件优先原则 (Component-First)
+禁止使用原生标签：除非 Shadcn 库中没有对应组件，否则严禁使用原生 <button>, <input>, <select> 等。
+
+自动导入路径：当需要新组件时，优先检查 @/components/ui 路径。如果该组件尚未安装，请提醒我运行 npx shadcn-ui@latest add [component]。
+
+图标规范：统一使用 lucide-react 图标库，保持图标大小一致（通常为 size-4 或 size-5）。
