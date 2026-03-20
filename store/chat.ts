@@ -1,3 +1,4 @@
+import { stat } from "fs";
 import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
 
@@ -54,15 +55,16 @@ interface ChatActions {
   /** 更新聊天标题 */
   updateChatTitle: (id: string, title: string) => void;
   /** 添加新消息到指定聊天 */
-  addMessage: (
-    chatId: string,
-    role: Message["role"],
-    content: string,
-  ) => void;
+  addMessage: (chatId: string, role: Message["role"], content: string,id?:string) => void;
   /** 获取指定聊天的消息列表 */
   getMessagesByChatId: (chatId: string) => Message[];
   /** 删除指定聊天的所有消息 */
   clearMessages: (chatId: string) => void;
+  /** 追加消息内容 */
+  appendMessageContent: (
+    messageId: string,
+    content: string,
+  ) => void;
 }
 
 /**
@@ -130,11 +132,14 @@ export const useChatStore = create<ChatState & ChatActions>()(
      * @param chatId - 所属聊天的 ID
      * @param role - 发送者角色：user 或 assistant
      * @param content - 消息内容
+     * @param id - 运行传入可选id
+     * 
      */
-    addMessage: (chatId, role, content) =>
+    addMessage: (chatId, role, content,id?) =>
       set((state) => {
+        const newMessageId = id || crypto.randomUUID();
         const newMessage: Message = {
-          id: crypto.randomUUID(),
+          id: newMessageId,
           chatId,
           role,
           content,
@@ -163,6 +168,25 @@ export const useChatStore = create<ChatState & ChatActions>()(
         state.messages = state.messages.filter(
           (msg: Message) => msg.chatId !== chatId,
         );
+      }),
+
+    /**
+     * 追加消息内容
+     * @param chatId - 聊天 ID
+     * @param messageId - 消息 ID
+     * @param content - 追加的内容
+     */
+
+    appendMessageContent: (
+      messageId: string,
+      content: string,
+    ) =>
+      set((state) => {
+        const message = state.messages.find((m) => m.id === messageId);
+        if (!message) {
+          return;
+        }
+        message.content += content;
       }),
   })),
 );

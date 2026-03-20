@@ -11,7 +11,7 @@ export async function POST(req: Request) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 30000);// 30 秒超时
 
-    console.log('token为：：',token)
+    console.log('token为：',token)
 
     const aiResponse = await fetch(
       "https://spark-api-open.xf-yun.com/x2/chat/completions",

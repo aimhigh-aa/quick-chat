@@ -17,7 +17,7 @@ export const testChat = async () => {
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
-    console.log("收到碎片:", decoder.decode(value));
+    console.log("收到碎片:", decoder.decode(value,{stream:true}));
   }
   console.log("--- 流传输结束 ---");
 };
