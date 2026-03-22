@@ -2,42 +2,42 @@ import { Textarea } from "../../ui/textarea"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger, DropdownMenuItem, DropdownMenuLabel } from "../../ui/dropdown-menu"
 import { Button } from "../../ui/button"
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
 } from "../../ui/dialog"
-import { Link, Plus, ImageUp, ChevronDown,Brain,Sparkle,Mic,Send, MessageSquare} from "lucide-react"
+import { Link, Plus, ImageUp, ChevronDown, Brain, Sparkle, Mic, Send, MessageSquare } from "lucide-react"
 import { useState } from "react"
 import { useChatStore } from "@/store/chat"
-import {StreamParser} from "@/lib/streamParser"
+import { StreamParser } from "@/lib/streamParser"
 import type { Message } from "@/store/chat";
 import { testChat } from "@/test/chatTest"
 
 interface ChatInputProps {
-    className?:string;
+    className?: string;
 }
-export const AppChatInput: React.FC<ChatInputProps> = ({className=''})=> {
+export const AppChatInput: React.FC<ChatInputProps> = ({ className = '' }) => {
     // 从 Store 获取状态和操作方法
-    const {activeChatId, addMessage, addChat,appendMessageContent} = useChatStore()
+    const { activeChatId, addMessage, addChat, appendMessageContent,appendReasoningContent } = useChatStore()
     // 输入框文本状态
-    const [text,setText]=useState("")
+    const [text, setText] = useState("")
     // Dialog 显示状态
     const [showDialog, setShowDialog] = useState(false)
 
     /**
      * 处理输入框内容变化
      */
-    const handleInputChange=(e:React.ChangeEvent<HTMLTextAreaElement>)=>setText(e.target.value)
+    const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => setText(e.target.value)
 
     /**
      * 处理发送消息
      * 如果没有活跃会话，弹出 Dialog 提示创建
      * 如果有活跃会话，直接发送消息
      */
-    const handleSend=()=>{
+    const handleSend = () => {
         // 没有输入内容时不处理
         if (!text.trim()) return
 
@@ -51,21 +51,25 @@ export const AppChatInput: React.FC<ChatInputProps> = ({className=''})=> {
         setText("")
 
         // 发送用户消息
-        addMessage(activeChatId,'user',textToUse)
+        addMessage(activeChatId, 'user', textToUse)
 
 
         //生成一个预定义的AI消息ID
         const assistantMsgId = crypto.randomUUID();
 
         //创建空的AI消息占位符
-        addMessage(activeChatId,'assistant','',assistantMsgId)
+        addMessage(activeChatId, 'assistant', '', assistantMsgId)
 
         // 启动流式请求
         const parser = new StreamParser()
-        parser.fetchStream({content:textToUse} as Message,{
-            onChunk:(content) => {
+        parser.fetchStream({ content: textToUse } as Message, {
+            onChunk: (content) => {
                 //利用消息ID更新AI消息
-                appendMessageContent(assistantMsgId,content);
+                appendMessageContent(assistantMsgId, content);
+            },
+            onReasoningChunk: (reasoningContent) => {
+                // 追加思考内容
+                appendReasoningContent(assistantMsgId, reasoningContent);
             },
             onDone: () => {
                 console.log('流式输出结束');
@@ -73,7 +77,7 @@ export const AppChatInput: React.FC<ChatInputProps> = ({className=''})=> {
             },
             onError: (error) => {
                 console.error('流式输出错误:', error);
-                appendMessageContent( assistantMsgId, `\n\n[错误]: ${error}`);
+                appendMessageContent(assistantMsgId, `\n\n[错误]: ${error}`);
             },
         })
 
@@ -107,14 +111,14 @@ export const AppChatInput: React.FC<ChatInputProps> = ({className=''})=> {
                     className="border-none focus-visible:ring-0 resize-none overflow-hidden min-h-5  "
 
                 />
-                {text.length?(
-                <Button onClick={handleSend} variant='outline' className="m-[8px] text-gray-500 hover:text-gray-800 border-0">
-                    <Send />
-                </Button>):null
+                {text.length ? (
+                    <Button onClick={handleSend} variant='outline' className="m-[8px] text-gray-500 hover:text-gray-800 border-0">
+                        <Send />
+                    </Button>) : null
                 }
-                
+
             </div>
-            
+
             <div className="flex justify-between">
                 <div className="m-2">
                     <DropdownMenu >

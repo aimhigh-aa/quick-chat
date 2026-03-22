@@ -2,6 +2,7 @@ import type { Message } from "@/store/chat";
 
 interface StreamCallbacks {
   onChunk?: (content: string) => void; // 收到新片段
+  onReasoningChunk?: (reasoningContent: string) => void;
   onDone?: () => void; // 流结束
   onError?: (error: String) => void; // 发生错误
 }
@@ -65,16 +66,19 @@ export class StreamParser {
                 return;
               }
               const content = json.choices?.[0]?.delta?.content;
-              if(content){
+              const reasoningContent =
+                json.choices?.[0]?.delta?.reasoning_content;
+              if (content) {
                 callbacks.onChunk?.(content);
               }
+              if (reasoningContent) {
+                callbacks.onReasoningChunk?.(reasoningContent);
+              }
             } catch (jsonError) {
-              console.warn('SSE JSON parse error:', jsonError);
+              console.warn("SSE JSON parse error:", jsonError);
             }
           }
         }
-
-
       }
     } catch (e) {
       console.log(e);

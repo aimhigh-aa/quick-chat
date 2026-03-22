@@ -1,11 +1,13 @@
 "use client"
 
-import { useMemo } from "react"
+import { useMemo, useState } from "react"
 import { ScrollArea } from "../../ui/scroll-area"
 import { Avatar, AvatarImage, AvatarFallback } from "../../ui/avatar"
 import { cn } from "@/lib/utils"
 import { useChatStore, type Message } from "@/store/chat"
 import { User, Bot } from "lucide-react"
+import { Sparkles, ChevronDown, ChevronRight } from "lucide-react"
+import {Markdown} from "@/components/MarkdownRender/MarkdownRender"
 
 /**
  * 格式化时间戳为友好显示
@@ -40,6 +42,15 @@ const ChatMessage = ({ message }: ChatMessageProps) => {
   // 判断是否为当前用户发送的消息
   const isUser = message.role === "user"
 
+  //思考过程展开状态
+  const [isReasoningExpanded, setIsReasoningExpanded] = useState(false)
+
+  //是否有思考过程内容
+  const hasReasoning = !!message.reasoningContent && message.reasoningContent.length > 0
+
+  // 是否正在思考中（有思考内容但还没有回答内容）
+  const isThinking = hasReasoning && !message.content
+
   return (
     <div
       className={cn(
@@ -69,6 +80,44 @@ const ChatMessage = ({ message }: ChatMessageProps) => {
 
       {/* 消息内容区域 */}
       <div className={cn("flex flex-col max-w-[75%]", isUser ? "items-end" : "items-start")}>
+        {/* AI 消息的思考过程（可折叠） */}
+        {!isUser && hasReasoning && (
+          <div className="w-full mb-2">
+            {/* 思考过程头部（可点击折叠） */}
+            <button
+              onClick={() => setIsReasoningExpanded(!isReasoningExpanded)}
+              className={cn(
+                "flex items-center gap-1.5 px-3 py-1.5 rounded-t-lg text-xs font-medium transition-colors",
+                "bg-zinc-50 text-zinc-800 hover:bg-zinc-100 border border-zinc-200 border-b-0",
+                !isReasoningExpanded && "rounded-b-lg border-b"
+              )}
+            >
+              <Sparkles className="size-3" />
+              <span>思考过程</span>
+              {isThinking && (
+                <span className="ml-1 flex gap-0.5">
+                  <span className="animate-bounce">·</span>
+                  <span className="animate-bounce delay-75">·</span>
+                  <span className="animate-bounce delay-150">·</span>
+                </span>
+              )}
+              {isReasoningExpanded ? (
+                <ChevronDown className="size-3 ml-1" />
+              ) : (
+                <ChevronRight className="size-3 ml-1" />
+              )}
+            </button>
+
+            {/* 思考过程内容 */}
+            {isReasoningExpanded && (
+              <div className="px-3 py-2 bg-zinc-50 rounded-b-lg border border-zinc-200 border-t-0">
+                <div className="text-xs text-zinc-800 whitespace-pre-wrap leading-relaxed">
+                  {message.reasoningContent}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
         {/* 气泡 */}
         <div
           className={cn(
@@ -77,10 +126,16 @@ const ChatMessage = ({ message }: ChatMessageProps) => {
             isUser
               ? "bg-primary text-primary-foreground rounded-br-sm"
               : // AI 消息：浅色背景，圆角在左侧
-                "bg-muted text-muted-foreground rounded-bl-sm"
+              "bg-muted text-muted-foreground rounded-bl-sm",
+            // 如果正在思考中但还没有内容，显示半透明提示
+            !isUser && !message.content && "opacity-50 italic"
           )}
         >
-          {message.content}
+          {isUser?message.content:message.content?(
+            <Markdown content={message.content}/>
+          ):(
+            isThinking && '思考中...'
+          )}
         </div>
         {/* 时间戳 */}
         <span className="text-xs text-muted-foreground/60 mt-1.5 px-1">

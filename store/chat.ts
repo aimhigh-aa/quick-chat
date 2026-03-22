@@ -20,13 +20,16 @@ export interface Chat {
  * @property chatId - 所属聊天的 ID
  * @property role - 发送者角色：user 或 assistant
  * @property content - 消息内容
+ * @property reasoningContent - 思考过程内容
  * @property createdAt - 创建时间戳
+ *
  */
 export interface Message {
   id: string;
   chatId: string;
   role: "user" | "assistant";
   content: string;
+  reasoningContent?: string;
   createdAt: number;
 }
 
@@ -55,16 +58,20 @@ interface ChatActions {
   /** 更新聊天标题 */
   updateChatTitle: (id: string, title: string) => void;
   /** 添加新消息到指定聊天 */
-  addMessage: (chatId: string, role: Message["role"], content: string,id?:string) => void;
+  addMessage: (
+    chatId: string,
+    role: Message["role"],
+    content: string,
+    id?: string,
+  ) => void;
   /** 获取指定聊天的消息列表 */
   getMessagesByChatId: (chatId: string) => Message[];
   /** 删除指定聊天的所有消息 */
   clearMessages: (chatId: string) => void;
   /** 追加消息内容 */
-  appendMessageContent: (
-    messageId: string,
-    content: string,
-  ) => void;
+  appendMessageContent: (messageId: string, content: string) => void;
+  /** 追加思考过程内容*/
+  appendReasoningContent: (messageId: string, reasoningContent: string) => void;
 }
 
 /**
@@ -133,9 +140,9 @@ export const useChatStore = create<ChatState & ChatActions>()(
      * @param role - 发送者角色：user 或 assistant
      * @param content - 消息内容
      * @param id - 运行传入可选id
-     * 
+     *
      */
-    addMessage: (chatId, role, content,id?) =>
+    addMessage: (chatId, role, content, id?) =>
       set((state) => {
         const newMessageId = id || crypto.randomUUID();
         const newMessage: Message = {
@@ -177,16 +184,31 @@ export const useChatStore = create<ChatState & ChatActions>()(
      * @param content - 追加的内容
      */
 
-    appendMessageContent: (
-      messageId: string,
-      content: string,
-    ) =>
+    appendMessageContent: (messageId: string, content: string) =>
       set((state) => {
         const message = state.messages.find((m) => m.id === messageId);
         if (!message) {
           return;
         }
         message.content += content;
+      }),
+
+    /**
+     * 追加思考过程内容（用于流式渲染 reasoning_content）
+     * @param messageId - 消息 ID
+     * @param reasoningContent - 思考内容片段
+     */
+    appendReasoningContent: (messageId, reasoningContent) =>
+      set((state) => {
+        const message = state.messages.find((m) => m.id === messageId);
+        if (!message) return;
+
+        // 初始化或追加
+        if (!message.reasoningContent) {
+          message.reasoningContent = reasoningContent;
+        } else {
+          message.reasoningContent += reasoningContent;
+        }
       }),
   })),
 );
