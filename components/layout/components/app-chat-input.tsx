@@ -9,7 +9,7 @@ import {
     DialogHeader,
     DialogTitle,
 } from "../../ui/dialog"
-import { Link, Plus, ImageUp, ChevronDown, Brain, Sparkle, Mic, Send, MessageSquare } from "lucide-react"
+import { Link, Plus, ImageUp, ChevronDown, Brain, Sparkle, Mic, Send, MessageSquare,Square } from "lucide-react"
 import { useState } from "react"
 import { useChatStore } from "@/store/chat"
 import { StreamParser } from "@/lib/streamParser"
@@ -21,7 +21,7 @@ interface ChatInputProps {
 }
 export const AppChatInput: React.FC<ChatInputProps> = ({ className = '' }) => {
     // 从 Store 获取状态和操作方法
-    const { activeChatId, addMessage, addChat, appendMessageContent,appendReasoningContent } = useChatStore()
+    const { activeChatId, addMessage, addChat, appendMessageContent, appendReasoningContent, abortController, setAbortController, stopStreaming, isStreaming } = useChatStore()
     // 输入框文本状态
     const [text, setText] = useState("")
     // Dialog 显示状态
@@ -50,6 +50,10 @@ export const AppChatInput: React.FC<ChatInputProps> = ({ className = '' }) => {
         const textToUse = text
         setText("")
 
+        //创建 AbortController 
+        const controller = new AbortController();
+        setAbortController(controller)
+
         // 发送用户消息
         addMessage(activeChatId, 'user', textToUse)
 
@@ -73,14 +77,24 @@ export const AppChatInput: React.FC<ChatInputProps> = ({ className = '' }) => {
             },
             onDone: () => {
                 console.log('流式输出结束');
+                setAbortController(null);
                 //TODO 将数据保存到数据库
             },
             onError: (error) => {
                 console.error('流式输出错误:', error);
                 appendMessageContent(assistantMsgId, `\n\n[错误]: ${error}`);
+                setAbortController(null);
             },
-        })
+            onAbort: () => {
+                console.log('流式请求被取消');
+            }
+        },controller.signal)
 
+    }
+
+    //中断按钮回调
+    const handleStop = () => {
+        stopStreaming()
     }
 
     /**
@@ -111,7 +125,10 @@ export const AppChatInput: React.FC<ChatInputProps> = ({ className = '' }) => {
                     className="border-none focus-visible:ring-0 resize-none overflow-hidden min-h-5  "
 
                 />
-                {text.length ? (
+                {isStreaming?(
+                    <Button onClick={handleStop} variant='destructive' size='icon' className="m-[8px]  border-0">
+                        <Square className="size-4"></Square>
+                    </Button>):text.length ? (
                     <Button onClick={handleSend} variant='outline' className="m-[8px] text-gray-500 hover:text-gray-800 border-0">
                         <Send />
                     </Button>) : null

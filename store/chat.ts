@@ -1,3 +1,4 @@
+import { log } from "console";
 import { stat } from "fs";
 import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
@@ -30,6 +31,7 @@ export interface Message {
   role: "user" | "assistant";
   content: string;
   reasoningContent?: string;
+  isAborted?: boolean; 
   createdAt: number;
 }
 
@@ -43,6 +45,8 @@ interface ChatState {
   chats: Chat[];
   messages: Message[];
   activeChatId: string | null;
+  abortController: AbortController|null; // 用于取消流式请求
+  isStreaming: boolean; // 流式请求状态
 }
 
 /**
@@ -72,6 +76,8 @@ interface ChatActions {
   appendMessageContent: (messageId: string, content: string) => void;
   /** 追加思考过程内容*/
   appendReasoningContent: (messageId: string, reasoningContent: string) => void;
+  setAbortController: (controller: AbortController|null) => void;
+  stopStreaming: () => void; //中断生成
 }
 
 /**
@@ -85,6 +91,8 @@ export const useChatStore = create<ChatState & ChatActions>()(
     chats: [],
     messages: [],
     activeChatId: null,
+    abortController: null,
+    isStreaming: false,
 
     /**
      * 添加新聊天到列表头部
@@ -210,5 +218,31 @@ export const useChatStore = create<ChatState & ChatActions>()(
           message.reasoningContent += reasoningContent;
         }
       }),
+    /**
+     * 设置当前的 AbortController
+     */
+    setAbortController: (controller) =>
+      set((state) => {
+        state.abortController = controller;
+        state.isStreaming = controller !== null; // 根据 controller 是否存在设置流式状态
+      }),
+    /**
+     * 中断当前的流式请求
+     */
+    stopStreaming: () =>
+      set((state) => {
+        if (state.abortController) {
+          state.abortController.abort();
+          //找到最后一条消息，标记为中断
+          const lastAiMessage = [...state.messages].reverse().find((msg) => msg.role === "assistant");
+          if (lastAiMessage) {
+            lastAiMessage.isAborted = true;
+          }
+          state.abortController = null;
+          state.isStreaming = false;
+        }
+      })
+
+
   })),
 );

@@ -5,12 +5,14 @@ interface StreamCallbacks {
   onReasoningChunk?: (reasoningContent: string) => void;
   onDone?: () => void; // 流结束
   onError?: (error: String) => void; // 发生错误
+  onAbort?: () => void; // 请求被取消
 }
 
 export class StreamParser {
   // 1. 在这里显式声明属性及其类型
   private textDecoder: TextDecoder;
   private sseBuffer: string;
+  private abortController: AbortController | null = null; // 用于取消请求
 
   constructor() {
     this.textDecoder = new TextDecoder("utf-8");
@@ -20,6 +22,7 @@ export class StreamParser {
   async fetchStream(
     message: Message,
     callbacks: StreamCallbacks,
+    signal?: AbortSignal, //取消信号
   ): Promise<void> {
     try {
       const response = await fetch("api/chat", {
@@ -27,6 +30,7 @@ export class StreamParser {
         body: JSON.stringify({
           messages: [{ role: "user", content: message.content }],
         }),
+        signal,
       });
 
       if (!response.body) {
@@ -37,6 +41,11 @@ export class StreamParser {
       const reader = response.body.getReader();
 
       while (true) {
+        //检查是否取消
+        if (signal?.aborted) {
+          console.log("请求已被取消");
+          return;
+        }
         const { value, done } = await reader.read();
         if (done) {
           callbacks.onDone?.();
@@ -44,7 +53,7 @@ export class StreamParser {
         }
 
         const chunk = this.textDecoder.decode(value, { stream: true });
-        console.log("收到碎片:", chunk);
+        // console.log("收到碎片:", chunk);
         this.sseBuffer += chunk;
         const lines = this.sseBuffer.split("\n");
         this.sseBuffer = lines.pop() || "";
@@ -82,6 +91,11 @@ export class StreamParser {
       }
     } catch (e) {
       console.log(e);
+      // 区分取消错误和其他错误
+      if (e instanceof Error && e.name === "AbortError") {
+        callbacks.onAbort?.();
+        return;
+      }
       const errorMessage = e instanceof Error ? e.message : String(e);
       callbacks.onError?.(errorMessage);
     }

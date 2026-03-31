@@ -1,13 +1,13 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useMemo, useState, useRef, useEffect } from "react"
 import { ScrollArea } from "../../ui/scroll-area"
 import { Avatar, AvatarImage, AvatarFallback } from "../../ui/avatar"
 import { cn } from "@/lib/utils"
 import { useChatStore, type Message } from "@/store/chat"
 import { User, Bot } from "lucide-react"
 import { Sparkles, ChevronDown, ChevronRight } from "lucide-react"
-import {Markdown} from "@/components/MarkdownRender/MarkdownRender"
+import { Markdown } from "@/components/MarkdownRender/MarkdownRender"
 
 /**
  * 格式化时间戳为友好显示
@@ -131,10 +131,16 @@ const ChatMessage = ({ message }: ChatMessageProps) => {
             !isUser && !message.content && "opacity-50 italic"
           )}
         >
-          {isUser?message.content:message.content?(
-            <Markdown content={message.content}/>
-          ):(
-            isThinking && '思考中...'
+          {isUser ? message.content : message.content ? (
+            <Markdown content={message.content} />
+          ) : (
+            isThinking && !message.isAborted && '思考中...'
+          )}
+          {/*中断提示*/}
+          {message.isAborted && (
+            <div className="mt-2 pt-2 border-t border-dashed border-muted-foreground/30 text-s text-zinc-950!  italic">
+              你已让系统停止这条回答
+            </div>
           )}
         </div>
         {/* 时间戳 */}
@@ -153,6 +159,64 @@ const ChatMessage = ({ message }: ChatMessageProps) => {
 export const AppChatBox = () => {
   // 从全局 Store 获取消息和当前活跃聊天 ID
   const { messages, activeChatId } = useChatStore()
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const [isAtBottom, setIsAtBottom] = useState(true)
+
+  /**
+   * 获取 ScrollArea 内部的 Viewport 元素
+   * Shadcn ScrollArea 结构：ScrollArea > ScrollAreaViewport > 内容
+   */
+
+  const getViewport = () => {
+    // ScrollArea 的第一个子元素就是 Viewport
+    return scrollRef.current?.querySelector('[data-radix-scroll-area-viewport]') as HTMLDivElement | null
+  }
+
+  //检查是否滑动到底部
+  const checkIsAtBottom = () => {
+    const viewPort = getViewport();
+    if (!viewPort) return true;
+    const { scrollTop, scrollHeight, clientHeight } = viewPort;
+    console.log('scrollTop:', scrollTop, 'scrollHeight:', scrollHeight, 'clientHeight:', clientHeight)
+    return scrollHeight - scrollTop - clientHeight < 50; // 50px 的阈值
+  }
+
+  //滚动到底部
+  const scrollToBottom = () => {
+    const viewPort = getViewport();
+    if (!viewPort) return;
+    viewPort.scrollTo({ top: viewPort.scrollHeight, behavior: 'smooth' })
+  }
+
+
+  //消息变化时自动滚动（仅在底部）
+  useEffect(() => {
+    if (isAtBottom) {
+      // 使用 setTimeout 确保 DOM 更新后再滚动
+      setTimeout(scrollToBottom, 0)
+    }
+  }, [messages])
+
+  /**
+    * 监听滚动事件
+    * 使用 useEffect 绑定，因为 onScroll 属性不生效
+    */
+  useEffect(() => {
+    const viewPort = getViewport();
+    if (!viewPort) return;
+
+    const handleScroll = () => {
+      setIsAtBottom(checkIsAtBottom())
+    }
+    viewPort.addEventListener('scroll', handleScroll)
+    // 初始化时检查一次
+    handleScroll()
+
+    return () => {
+      viewPort.removeEventListener('scroll', handleScroll)
+    }
+  }, [])
+
 
   /**
    * 过滤并排序当前聊天的消息
@@ -167,7 +231,7 @@ export const AppChatBox = () => {
 
   return (
     <div className="bg-gray-50 h-full">
-      <ScrollArea className="w-[45vw] h-[calc(100vh-200px)]">
+      <ScrollArea className="w-[45vw] h-[calc(100vh-200px)]" ref={scrollRef} >
         <div className="p-5">
           {/* 空状态：没有活跃聊天或没有消息 */}
           {currentMessages.length === 0 ? (
