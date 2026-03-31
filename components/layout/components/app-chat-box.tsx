@@ -177,7 +177,6 @@ export const AppChatBox = () => {
     const viewPort = getViewport();
     if (!viewPort) return true;
     const { scrollTop, scrollHeight, clientHeight } = viewPort;
-    console.log('scrollTop:', scrollTop, 'scrollHeight:', scrollHeight, 'clientHeight:', clientHeight)
     return scrollHeight - scrollTop - clientHeight < 50; // 50px 的阈值
   }
 
