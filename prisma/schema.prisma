@@ -1,0 +1,82 @@
+
+// Prisma 数据库 Schema 定义
+// 定义 NextAuth.js 认证系统所需的表结构
+// 包含用户、账号、会话、验证令牌四个核心模型
+
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+
+// Account 模型
+// 存储 OAuth 提供商的账号信息，用于关联第三方登录
+// @relation user - 关联到 User 模型，删除用户时级联删除账号
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+
+// Session 模型
+// 存储用户会话信息，用于 JWT + 数据库存储的混合策略
+// @relation user - 关联到 User 模型
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+
+// User 模型
+// 存储用户核心信息，支持邮箱/密码和 OAuth 两种认证方式
+// @field password - 可选字段，OAuth 用户可为空
+// @field emailVerified - 邮箱验证时间，OAuth 用户自动标记
+
+model User {
+  id             String    @id @default(cuid())
+  email          String    @unique
+  password       String?   // Credentials 登录用，OAuth 可为空
+  name           String?
+  image          String?
+  emailVerified  DateTime?
+
+  accounts  Account[]
+  sessions  Session[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+
+// VerificationToken 模型
+// 存储邮箱验证令牌，用于密码重置和邮箱验证流程
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
