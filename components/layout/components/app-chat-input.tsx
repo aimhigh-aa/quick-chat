@@ -10,9 +10,9 @@ import {
     DialogTitle,
 } from "../../ui/dialog"
 import { Link, Plus, ImageUp, ChevronDown, Brain, Sparkle, Mic, Send, MessageSquare, Square } from "lucide-react"
-import { useEffect, useState } from "react"
-import { useChatStore } from "@/store/chat"
+import { useEffect, useState, useRef } from "react"
 import { StreamParser } from "@/lib/streamParser"
+import { useChatStore } from "@/store/chat"
 import type { Message } from "@/store/chat";
 import { testChat } from "@/test/chatTest"
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition"
@@ -21,15 +21,50 @@ import { useFileUpload, UploadedFile } from '@/hooks/useFileUpload'
 interface ChatInputProps {
     className?: string;
 }
+
+/**
+ * 聊天输入组件
+ * 
+ * 架构：渲染与交互层（第三层）
+ * - 负责用户输入、发送消息
+ * - 使用渲染缓冲区接收流式数据
+ * - 通过定时器周期刷新缓冲区，实现节奏控制
+ * 
+ * 缓冲区刷新流程：
+ * 1. StreamParser 解析 SSE 数据
+ * 2. 回调 pushToRenderBuffer 存入缓冲区
+ * 3. 本地定时器按 flushInterval 调用 flushRenderBuffer
+ * 4. 批量写入实际消息，触发 React 渲染
+ */
 export const AppChatInput: React.FC<ChatInputProps> = ({ className = '' }) => {
     // 从 Store 获取状态和操作方法
-    const { activeChatId, addMessage, addChat, appendMessageContent, appendReasoningContent, abortController, setAbortController, stopStreaming, isStreaming } = useChatStore()
+    const { 
+        activeChatId, 
+        addMessage, 
+        addChat, 
+        appendMessageContent, 
+        appendReasoningContent,
+        pushToRenderBuffer,
+        flushRenderBuffer,
+        flushAllBuffers,
+        flushInterval,
+        abortController, 
+        setAbortController, 
+        stopStreaming, 
+        isStreaming 
+    } = useChatStore()
+    
     // 输入框文本状态
     const [text, setText] = useState("")
     // Dialog 显示状态
     const [showDialog, setShowDialog] = useState(false)
     //语音Dialog 显示状态
     const [speechErrorDialog, setSpeechErrorDialog] = useState<{ open: boolean, message: string }>({ open: false, message: "" })
+    
+    // 当前活跃的消息 ID（流式响应）
+    const activeMessageIdRef = useRef<string | null>(null)
+    // 刷新定时器引用
+    const flushTimerRef = useRef<NodeJS.Timeout | null>(null)
 
 
 
@@ -155,33 +190,60 @@ export const AppChatInput: React.FC<ChatInputProps> = ({ className = '' }) => {
 
         //生成一个预定义的AI消息ID
         const assistantMsgId = crypto.randomUUID();
+        activeMessageIdRef.current = assistantMsgId
 
         //创建空的AI消息占位符
         addMessage(activeChatId, 'assistant', '', assistantMsgId)
 
-        // 启动流式请求
+        // 启动流式请求（使用渲染缓冲区）
         const parser = new StreamParser()
+        
+        // 启动定时器：按固定节奏刷新渲染缓冲区
+        flushTimerRef.current = setInterval(() => {
+            if (activeMessageIdRef.current) {
+                flushRenderBuffer(activeMessageIdRef.current)
+            }
+        }, flushInterval)
+
         parser.fetchStream({ content: finalContent } as Message, {
-            onChunk: (content) => {
-                //利用消息ID更新AI消息
-                appendMessageContent(assistantMsgId, content);
+            onChunk: (content: string) => {
+                // 推入渲染缓冲区（解耦数据接收与渲染）
+                pushToRenderBuffer(assistantMsgId, content);
             },
-            onReasoningChunk: (reasoningContent) => {
-                // 追加思考内容
-                appendReasoningContent(assistantMsgId, reasoningContent);
+            onReasoningChunk: (reasoningContent: string) => {
+                // 推入渲染缓冲区
+                pushToRenderBuffer(assistantMsgId, "", reasoningContent);
             },
             onDone: () => {
                 console.log('流式输出结束');
+                // 清除定时器
+                if (flushTimerRef.current) {
+                    clearInterval(flushTimerRef.current);
+                    flushTimerRef.current = null;
+                }
+                // 强制刷新剩余缓冲区
+                flushAllBuffers();
                 setAbortController(null);
-                //TODO 将数据保存到数据库
             },
-            onError: (error) => {
+            onError: (error: string) => {
                 console.error('流式输出错误:', error);
+                // 清除定时器
+                if (flushTimerRef.current) {
+                    clearInterval(flushTimerRef.current);
+                    flushTimerRef.current = null;
+                }
+                // 强制刷新剩余缓冲区
+                flushAllBuffers();
                 appendMessageContent(assistantMsgId, `\n\n[错误]: ${error}`);
                 setAbortController(null);
             },
             onAbort: () => {
                 console.log('流式请求被取消');
+                // 清除定时器
+                if (flushTimerRef.current) {
+                    clearInterval(flushTimerRef.current);
+                    flushTimerRef.current = null;
+                }
             }
         }, controller.signal)
 

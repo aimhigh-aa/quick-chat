@@ -1,7 +1,9 @@
-import { log } from "console";
-import { stat } from "fs";
 import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
+import { enableMapSet } from "immer";
+
+// 启用 Immer 的 MapSet 插件（支持 Map 类型）
+enableMapSet();
 
 /**
  * Chat 数据接口定义
@@ -31,8 +33,18 @@ export interface Message {
   role: "user" | "assistant";
   content: string;
   reasoningContent?: string;
-  isAborted?: boolean; 
+  isAborted?: boolean;
   createdAt: number;
+}
+
+/**
+ * 渲染缓冲区单元
+ * 用于暂存待渲染的内容片段
+ */
+interface RenderBufferUnit {
+  content: string;
+  reasoningContent?: string;
+  timestamp: number;
 }
 
 /**
@@ -40,13 +52,19 @@ export interface Message {
  * @property chats - 聊天列表数组
  * @property messages - 消息列表数组
  * @property activeChatId - 当前活跃聊天的 ID
+ * @property renderBuffer - 渲染缓冲区（消息ID -> 待渲染内容）
+ * @property flushInterval - 刷新间隔（毫秒），控制渲染节奏
+ * @property abortController - 用于取消流式请求
+ * @property isStreaming - 流式请求状态
  */
 interface ChatState {
   chats: Chat[];
   messages: Message[];
   activeChatId: string | null;
-  abortController: AbortController|null; // 用于取消流式请求
-  isStreaming: boolean; // 流式请求状态
+  renderBuffer: Map<string, RenderBufferUnit[]>; // 消息ID -> 缓冲区
+  flushInterval: number; // 刷新间隔 ms
+  abortController: AbortController | null;
+  isStreaming: boolean;
 }
 
 /**
@@ -72,27 +90,52 @@ interface ChatActions {
   getMessagesByChatId: (chatId: string) => Message[];
   /** 删除指定聊天的所有消息 */
   clearMessages: (chatId: string) => void;
-  /** 追加消息内容 */
+  /** 追加消息内容（直接写入，非缓冲） */
   appendMessageContent: (messageId: string, content: string) => void;
-  /** 追加思考过程内容*/
+  /** 追加思考过程内容（直接写入，非缓冲） */
   appendReasoningContent: (messageId: string, reasoningContent: string) => void;
-  setAbortController: (controller: AbortController|null) => void;
-  stopStreaming: () => void; //中断生成
+  /** 将内容推入渲染缓冲区（解耦数据接收与渲染） */
+  pushToRenderBuffer: (messageId: string, content: string, reasoningContent?: string) => void;
+  /** 刷新渲染缓冲区（将缓冲内容写入实际消息） */
+  flushRenderBuffer: (messageId: string) => void;
+  /** 刷新所有活跃的渲染缓冲区 */
+  flushAllBuffers: () => void;
+  /** 设置刷新间隔（控制渲染节奏） */
+  setFlushInterval: (interval: number) => void;
+  /** 设置当前的 AbortController */
+  setAbortController: (controller: AbortController | null) => void;
+  /** 中断生成 */
+  stopStreaming: () => void;
 }
 
 /**
  * Chat 全局状态管理 Store
- * 使用 Zustand + Immer 实现不可变状态更新
- * 仅存储必须全局共享的聊天列表和当前活跃聊天 ID（符合编码规范第 3 条）
+ * 
+ * 架构设计：三层架构
+ * 1. 流式解析层：StreamParser（lib/streamParser.ts）- 解析 SSE 数据
+ * 2. 消息状态管理层：Chat Store（当前文件）- 渲染缓冲区 + 节奏控制
+ * 3. 渲染与交互层：React 组件 - UI 展示
+ * 
+ * 双缓冲区设计：
+ * - SSE 解析缓冲区：StreamParser.parseBuffer - 暂存不完整的 SSE 行
+ * - 渲染缓冲区：renderBuffer - 暂存待渲染的内容，批量写入避免频繁状态更新
+ * 
+ * 节奏控制机制：
+ * - flushInterval：刷新间隔，控制数据到达与渲染的解耦
+ * - 接收端无阻塞，渲染端按固定节奏批量更新
  */
 export const useChatStore = create<ChatState & ChatActions>()(
   immer((set, get) => ({
-    // 初始状态
+    // ==================== 初始状态 ====================
     chats: [],
     messages: [],
     activeChatId: null,
+    renderBuffer: new Map(),
+    flushInterval: 50, // 默认 50ms 刷新一次（20fps 渲染频率）
     abortController: null,
     isStreaming: false,
+
+    // ==================== 聊天管理 ====================
 
     /**
      * 添加新聊天到列表头部
@@ -105,9 +148,7 @@ export const useChatStore = create<ChatState & ChatActions>()(
           title: chat?.title || `New Chat ${state.chats.length + 1}`,
           createdAt: chat?.createdAt || Date.now(),
         };
-        // 新聊天插入到列表头部
         state.chats.unshift(newChat);
-        // 自动设为当前活跃聊天
         state.activeChatId = newChat.id;
       }),
 
@@ -129,6 +170,13 @@ export const useChatStore = create<ChatState & ChatActions>()(
         if (state.activeChatId === id) {
           state.activeChatId = state.chats[0]?.id || null;
         }
+        // 同时清理该聊天相关的渲染缓冲区
+        state.renderBuffer.forEach((_, key) => {
+          const msg = state.messages.find(m => m.id === key);
+          if (msg?.chatId === id) {
+            state.renderBuffer.delete(key);
+          }
+        });
       }),
 
     /**
@@ -147,8 +195,7 @@ export const useChatStore = create<ChatState & ChatActions>()(
      * @param chatId - 所属聊天的 ID
      * @param role - 发送者角色：user 或 assistant
      * @param content - 消息内容
-     * @param id - 运行传入可选id
-     *
+     * @param id - 可传入可选 ID
      */
     addMessage: (chatId, role, content, id?) =>
       set((state) => {
@@ -161,6 +208,8 @@ export const useChatStore = create<ChatState & ChatActions>()(
           createdAt: Date.now(),
         };
         state.messages.push(newMessage);
+        // 新消息初始化渲染缓冲区
+        state.renderBuffer.set(newMessageId, []);
       }),
 
     /**
@@ -180,29 +229,32 @@ export const useChatStore = create<ChatState & ChatActions>()(
      */
     clearMessages: (chatId: string) =>
       set((state) => {
+        const messageIds = state.messages
+          .filter((msg: Message) => msg.chatId === chatId)
+          .map((msg: Message) => msg.id);
+        // 清理相关渲染缓冲区
+        messageIds.forEach((id) => state.renderBuffer.delete(id));
         state.messages = state.messages.filter(
           (msg: Message) => msg.chatId !== chatId,
         );
       }),
 
+    // ==================== 消息内容操作 ====================
+
     /**
-     * 追加消息内容
-     * @param chatId - 聊天 ID
+     * 追加消息内容（直接写入）
      * @param messageId - 消息 ID
      * @param content - 追加的内容
      */
-
     appendMessageContent: (messageId: string, content: string) =>
       set((state) => {
         const message = state.messages.find((m) => m.id === messageId);
-        if (!message) {
-          return;
-        }
+        if (!message) return;
         message.content += content;
       }),
 
     /**
-     * 追加思考过程内容（用于流式渲染 reasoning_content）
+     * 追加思考过程内容（直接写入）
      * @param messageId - 消息 ID
      * @param reasoningContent - 思考内容片段
      */
@@ -210,22 +262,138 @@ export const useChatStore = create<ChatState & ChatActions>()(
       set((state) => {
         const message = state.messages.find((m) => m.id === messageId);
         if (!message) return;
-
-        // 初始化或追加
         if (!message.reasoningContent) {
           message.reasoningContent = reasoningContent;
         } else {
           message.reasoningContent += reasoningContent;
         }
       }),
+
+    // ==================== 渲染缓冲区（核心亮点） ====================
+
+    /**
+     * 将内容推入渲染缓冲区
+     * 
+     * 设计意图：解耦数据接收与渲染
+     * - 解析层快速接收数据，存入缓冲区
+     * - 渲染层按固定节奏（flushInterval）批量读取缓冲区
+     * - 避免每个 chunk 都触发 React 重渲染
+     * 
+     * @param messageId - 消息 ID
+     * @param content - 正文内容
+     * @param reasoningContent - 思考过程内容（可选）
+     */
+    pushToRenderBuffer: (messageId, content, reasoningContent) =>
+      set((state) => {
+        // 获取或初始化该消息的缓冲区
+        const buffer = state.renderBuffer.get(messageId) || [];
+        
+        // 添加新的渲染单元
+        buffer.push({
+          content,
+          reasoningContent,
+          timestamp: Date.now(),
+        });
+        
+        state.renderBuffer.set(messageId, buffer);
+      }),
+
+    /**
+     * 刷新指定消息的渲染缓冲区
+     * 
+     * 作用：将缓冲区中的内容批量写入实际消息
+     * 配合节奏控制，实现数据接收与渲染的解耦
+     * 
+     * @param messageId - 消息 ID
+     */
+    flushRenderBuffer: (messageId) =>
+      set((state) => {
+        const buffer = state.renderBuffer.get(messageId);
+        if (!buffer || buffer.length === 0) return;
+
+        const message = state.messages.find((m) => m.id === messageId);
+        if (!message) return;
+
+        // 合并缓冲区内容
+        let contentToAppend = "";
+        let reasoningToAppend = "";
+
+        for (const unit of buffer) {
+          contentToAppend += unit.content;
+          if (unit.reasoningContent) {
+            reasoningToAppend += unit.reasoningContent;
+          }
+        }
+
+        // 写入实际消息
+        message.content += contentToAppend;
+        if (reasoningToAppend) {
+          message.reasoningContent = 
+            (message.reasoningContent || "") + reasoningToAppend;
+        }
+
+        // 清空缓冲区
+        state.renderBuffer.set(messageId, []);
+      }),
+
+    /**
+     * 刷新所有活跃的渲染缓冲区
+     * 用途：流式结束时强制刷新剩余内容
+     */
+    flushAllBuffers: () =>
+      set((state) => {
+        state.renderBuffer.forEach((buffer, messageId) => {
+          if (buffer.length === 0) return;
+          
+          const message = state.messages.find((m) => m.id === messageId);
+          if (!message) return;
+
+          let contentToAppend = "";
+          let reasoningToAppend = "";
+
+          for (const unit of buffer) {
+            contentToAppend += unit.content;
+            if (unit.reasoningContent) {
+              reasoningToAppend += unit.reasoningContent;
+            }
+          }
+
+          message.content += contentToAppend;
+          if (reasoningToAppend) {
+            message.reasoningContent = 
+              (message.reasoningContent || "") + reasoningToAppend;
+          }
+
+          state.renderBuffer.set(messageId, []);
+        });
+      }),
+
+    /**
+     * 设置刷新间隔（控制渲染节奏）
+     * 
+     * 调节建议：
+     * - 值越小，渲染越快，但 React 重渲染越频繁
+     * - 值越大，批量处理越多，但感官延迟越高
+     * - 推荐范围：30-100ms
+     * 
+     * @param interval - 刷新间隔（毫秒）
+     */
+    setFlushInterval: (interval) =>
+      set((state) => {
+        state.flushInterval = Math.max(10, Math.min(500, interval));
+      }),
+
+    // ==================== 流式控制 ====================
+
     /**
      * 设置当前的 AbortController
      */
     setAbortController: (controller) =>
       set((state) => {
         state.abortController = controller;
-        state.isStreaming = controller !== null; // 根据 controller 是否存在设置流式状态
+        state.isStreaming = controller !== null;
       }),
+
     /**
      * 中断当前的流式请求
      */
@@ -233,16 +401,37 @@ export const useChatStore = create<ChatState & ChatActions>()(
       set((state) => {
         if (state.abortController) {
           state.abortController.abort();
-          //找到最后一条消息，标记为中断
-          const lastAiMessage = [...state.messages].reverse().find((msg) => msg.role === "assistant");
+          // 找到最后一条 AI 消息，标记为中断
+          const lastAiMessage = [...state.messages].reverse()
+            .find((msg) => msg.role === "assistant");
           if (lastAiMessage) {
             lastAiMessage.isAborted = true;
           }
           state.abortController = null;
           state.isStreaming = false;
+          // 中断时强制刷新剩余缓冲区
+          state.renderBuffer.forEach((buffer, messageId) => {
+            if (buffer.length > 0) {
+              const message = state.messages.find((m) => m.id === messageId);
+              if (message) {
+                let contentToAppend = "";
+                let reasoningToAppend = "";
+                for (const unit of buffer) {
+                  contentToAppend += unit.content;
+                  if (unit.reasoningContent) {
+                    reasoningToAppend += unit.reasoningContent;
+                  }
+                }
+                message.content += contentToAppend;
+                if (reasoningToAppend) {
+                  message.reasoningContent = 
+                    (message.reasoningContent || "") + reasoningToAppend;
+                }
+              }
+              state.renderBuffer.set(messageId, []);
+            }
+          });
         }
-      })
-
-
+      }),
   })),
 );
