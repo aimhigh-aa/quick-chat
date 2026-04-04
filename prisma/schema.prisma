@@ -65,8 +65,40 @@ model User {
 
   accounts  Account[]
   sessions  Session[]
+  chats     Chat[]     // 用户关联的聊天会话
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+// Chat 模型
+// 存储聊天会话信息，与用户关联
+model Chat {
+  id        String   @id @default(cuid())
+  userId    String
+  title     String   @default("New Chat")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages Message[]
+
+  @@index([userId])
+}
+
+// Message 模型
+// 存储聊天消息，与 Chat 关联
+model Message {
+  id               String  @id @default(cuid())
+  chatId           String
+  role             String  // "user" | "assistant"
+  content          String  @db.Text
+  reasoningContent String? @db.Text
+  isAborted        Boolean @default(false)
+  createdAt        DateTime @default(now())
+
+  chat Chat @relation(fields: [chatId], references: [id], onDelete: Cascade)
+
+  @@index([chatId])
 }
 
 

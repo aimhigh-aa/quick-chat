@@ -14,7 +14,6 @@ import { useEffect, useState, useRef } from "react"
 import { StreamParser } from "@/lib/streamParser"
 import { useChatStore } from "@/store/chat"
 import type { Message } from "@/store/chat";
-import { testChat } from "@/test/chatTest"
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition"
 import { useFileUpload, UploadedFile } from '@/hooks/useFileUpload'
 
@@ -24,52 +23,57 @@ interface ChatInputProps {
 
 /**
  * 聊天输入组件
- * 
- * 架构：渲染与交互层（第三层）
+ *
+ * 架构：渲染与交互层（第四层 - 与四层架构对应）
  * - 负责用户输入、发送消息
+ * - 通过 Server Actions 与后端通信
  * - 使用渲染缓冲区接收流式数据
  * - 通过定时器周期刷新缓冲区，实现节奏控制
- * 
- * 缓冲区刷新流程：
- * 1. StreamParser 解析 SSE 数据
- * 2. 回调 pushToRenderBuffer 存入缓冲区
- * 3. 本地定时器按 flushInterval 调用 flushRenderBuffer
- * 4. 批量写入实际消息，触发 React 渲染
+ *
+ * 数据流：
+ * 1. 用户发送 -> createUserMessage (Server Action) 创建消息
+ * 2. StreamParser 解析 SSE 数据
+ * 3. 回调 pushToRenderBuffer 存入缓冲区（本地渲染）
+ * 4. 本地定时器按 flushInterval 调用 flushRenderBuffer
+ * 5. 流式结束后 -> saveAssistantMessage (Server Action) 保存最终内容
  */
 export const AppChatInput: React.FC<ChatInputProps> = ({ className = '' }) => {
     // 从 Store 获取状态和操作方法
-    const { 
-        activeChatId, 
-        addMessage, 
-        addChat, 
-        appendMessageContent, 
-        appendReasoningContent,
+    const {
+        activeChatId,
+        addChat,
+        createUserMessage,
+        saveAssistantMessage,
+        abortMessage,
         pushToRenderBuffer,
         flushRenderBuffer,
         flushAllBuffers,
         flushInterval,
-        abortController, 
-        setAbortController, 
-        stopStreaming, 
-        isStreaming 
+        setAbortController,
+        stopStreaming,
+        isStreaming,
+        messagesState
     } = useChatStore()
-    
+
     // 输入框文本状态
     const [text, setText] = useState("")
     // Dialog 显示状态
     const [showDialog, setShowDialog] = useState(false)
-    //语音Dialog 显示状态
+    // 语音Dialog 显示状态
     const [speechErrorDialog, setSpeechErrorDialog] = useState<{ open: boolean, message: string }>({ open: false, message: "" })
-    
+    // 发送状态
+    const [isSending, setIsSending] = useState(false)
+
     // 当前活跃的消息 ID（流式响应）
     const activeMessageIdRef = useRef<string | null>(null)
+    const activeChatIdRef = useRef<string | null>(null)
     // 刷新定时器引用
     const flushTimerRef = useRef<NodeJS.Timeout | null>(null)
+    // 累积内容（用于最终保存）
+    const accumulatedContentRef = useRef("")
+    const accumulatedReasoningRef = useRef("")
 
-
-
-
-    //使用语音识别hook
+    // 使用语音识别hook
     const {
         status,
         recordingTime,
@@ -85,7 +89,7 @@ export const AppChatInput: React.FC<ChatInputProps> = ({ className = '' }) => {
         60 // 最大录音60秒
     )
 
-    //使用文件上传hook
+    // 使用文件上传hook
     const {
         files,
         isUploading,
@@ -120,8 +124,7 @@ export const AppChatInput: React.FC<ChatInputProps> = ({ className = '' }) => {
         return content + attachmentsText
     }
 
-
-    //监听语音错误
+    // 监听语音错误
     useEffect(() => {
         if (speechError) {
             setSpeechErrorDialog({
@@ -131,7 +134,7 @@ export const AppChatInput: React.FC<ChatInputProps> = ({ className = '' }) => {
         }
     }, [speechError])
 
-    //关闭dialog回调
+    // 关闭dialog回调
     const handleCloseErrorDialog = () => {
         setSpeechErrorDialog({ open: false, message: '' })
     }
@@ -160,7 +163,7 @@ export const AppChatInput: React.FC<ChatInputProps> = ({ className = '' }) => {
      * 如果没有活跃会话，弹出 Dialog 提示创建
      * 如果有活跃会话，直接发送消息
      */
-    const handleSend = () => {
+    const handleSend = async () => {
         // 没有输入内容时不处理
         if (!text.trim()) return
 
@@ -169,87 +172,150 @@ export const AppChatInput: React.FC<ChatInputProps> = ({ className = '' }) => {
             setShowDialog(true)
             return
         }
+
         const textToUse = text
         // 过滤成功上传的文件
         const successFiles = files.filter(f => f.status === 'success')
 
-
         // 构建带附件的完整消息内容
         const finalContent = buildMessageWithAttachments(textToUse, successFiles)
         clearFiles()
-
         setText("")
+        setIsSending(true)
 
-        //创建 AbortController 
-        const controller = new AbortController();
-        setAbortController(controller)
+        try {
+            // 1. 创建用户消息和AI消息占位（通过 Server Action）
+            const result = await createUserMessage(activeChatId, finalContent)
 
-        // 发送用户消息
-        addMessage(activeChatId, 'user', textToUse)
-
-
-        //生成一个预定义的AI消息ID
-        const assistantMsgId = crypto.randomUUID();
-        activeMessageIdRef.current = assistantMsgId
-
-        //创建空的AI消息占位符
-        addMessage(activeChatId, 'assistant', '', assistantMsgId)
-
-        // 启动流式请求（使用渲染缓冲区）
-        const parser = new StreamParser()
-        
-        // 启动定时器：按固定节奏刷新渲染缓冲区
-        flushTimerRef.current = setInterval(() => {
-            if (activeMessageIdRef.current) {
-                flushRenderBuffer(activeMessageIdRef.current)
+            if (!result) {
+                setIsSending(false)
+                return
             }
-        }, flushInterval)
 
-        parser.fetchStream({ content: finalContent } as Message, {
-            onChunk: (content: string) => {
-                // 推入渲染缓冲区（解耦数据接收与渲染）
-                pushToRenderBuffer(assistantMsgId, content);
-            },
-            onReasoningChunk: (reasoningContent: string) => {
-                // 推入渲染缓冲区
-                pushToRenderBuffer(assistantMsgId, "", reasoningContent);
-            },
-            onDone: () => {
-                console.log('流式输出结束');
-                // 清除定时器
-                if (flushTimerRef.current) {
-                    clearInterval(flushTimerRef.current);
-                    flushTimerRef.current = null;
-                }
-                // 强制刷新剩余缓冲区
-                flushAllBuffers();
-                setAbortController(null);
-            },
-            onError: (error: string) => {
-                console.error('流式输出错误:', error);
-                // 清除定时器
-                if (flushTimerRef.current) {
-                    clearInterval(flushTimerRef.current);
-                    flushTimerRef.current = null;
-                }
-                // 强制刷新剩余缓冲区
-                flushAllBuffers();
-                appendMessageContent(assistantMsgId, `\n\n[错误]: ${error}`);
-                setAbortController(null);
-            },
-            onAbort: () => {
-                console.log('流式请求被取消');
-                // 清除定时器
-                if (flushTimerRef.current) {
-                    clearInterval(flushTimerRef.current);
-                    flushTimerRef.current = null;
-                }
-            }
-        }, controller.signal)
+            const { assistantMessageId } = result
+            activeMessageIdRef.current = assistantMessageId
+            activeChatIdRef.current = activeChatId
 
+            // 重置累积内容
+            accumulatedContentRef.current = ""
+            accumulatedReasoningRef.current = ""
+
+            // 2. 创建 AbortController
+            const controller = new AbortController()
+            setAbortController(controller)
+
+            // 3. 启动流式请求（使用渲染缓冲区）
+            const parser = new StreamParser()
+
+            // 启动定时器：按固定节奏刷新渲染缓冲区
+            flushTimerRef.current = setInterval(() => {
+                if (activeMessageIdRef.current) {
+                    flushRenderBuffer(activeMessageIdRef.current)
+                }
+            }, flushInterval)
+
+            parser.fetchStream({ content: finalContent } as Message, {
+                onChunk: (content: string) => {
+                    // 推入渲染缓冲区（解耦数据接收与渲染）
+                    pushToRenderBuffer(assistantMessageId, content)
+                    // 累积内容用于最终保存
+                    accumulatedContentRef.current += content
+                },
+                onReasoningChunk: (reasoningContent: string) => {
+                    // 推入渲染缓冲区
+                    pushToRenderBuffer(assistantMessageId, "", reasoningContent)
+                    // 累积思考过程
+                    accumulatedReasoningRef.current += reasoningContent
+                },
+                onDone: async () => {
+                    console.log('流式输出结束')
+                    // 清除定时器
+                    if (flushTimerRef.current) {
+                        clearInterval(flushTimerRef.current)
+                        flushTimerRef.current = null
+                    }
+                    // 强制刷新剩余缓冲区
+                    flushAllBuffers()
+                    setAbortController(null)
+                    setIsSending(false)
+
+                    // 4. 保存AI消息的最终内容到服务器（异步，不阻塞）
+                    if (activeChatIdRef.current && activeMessageIdRef.current) {
+                        await saveAssistantMessage(
+                            activeMessageIdRef.current,
+                            activeChatIdRef.current,
+                            accumulatedContentRef.current,
+                            accumulatedReasoningRef.current || undefined
+                        )
+                    }
+
+                    // 清理引用
+                    activeMessageIdRef.current = null
+                    activeChatIdRef.current = null
+                },
+                onError: async (error: string) => {
+                    console.error('流式输出错误:', error)
+                    // 清除定时器
+                    if (flushTimerRef.current) {
+                        clearInterval(flushTimerRef.current)
+                        flushTimerRef.current = null
+                    }
+                    // 强制刷新剩余缓冲区
+                    flushAllBuffers()
+
+                    // 保存错误信息到消息
+                    const errorContent = accumulatedContentRef.current + `\n\n[错误]: ${error}`
+                    if (activeChatIdRef.current && activeMessageIdRef.current) {
+                        await saveAssistantMessage(
+                            activeMessageIdRef.current,
+                            activeChatIdRef.current,
+                            errorContent,
+                            accumulatedReasoningRef.current || undefined
+                        )
+                    }
+
+                    setAbortController(null)
+                    setIsSending(false)
+                    activeMessageIdRef.current = null
+                    activeChatIdRef.current = null
+                },
+                onAbort: async () => {
+                    console.log('流式请求被取消')
+                    // 清除定时器
+                    if (flushTimerRef.current) {
+                        clearInterval(flushTimerRef.current)
+                        flushTimerRef.current = null
+                    }
+
+                    // 标记消息为中断状态并保存
+                    if (activeChatIdRef.current && activeMessageIdRef.current) {
+                        await abortMessage(
+                            activeMessageIdRef.current,
+                            activeChatIdRef.current
+                        )
+                        // 保存已生成的内容
+                        if (accumulatedContentRef.current) {
+                            await saveAssistantMessage(
+                                activeMessageIdRef.current,
+                                activeChatIdRef.current,
+                                accumulatedContentRef.current,
+                                accumulatedReasoningRef.current || undefined
+                            )
+                        }
+                    }
+
+                    setIsSending(false)
+                    activeMessageIdRef.current = null
+                    activeChatIdRef.current = null
+                }
+            }, controller.signal)
+        } catch (error) {
+            console.error('发送消息失败:', error)
+            setIsSending(false)
+        }
     }
 
-    //中断按钮回调
+    // 中断按钮回调
     const handleStop = () => {
         stopStreaming()
     }
@@ -258,21 +324,31 @@ export const AppChatInput: React.FC<ChatInputProps> = ({ className = '' }) => {
      * 处理立即创建会话并发送消息
      * 创建新会话后自动激活，然后发送当前输入的内容
      */
-    const handleCreateAndSend = () => {
+    const handleCreateAndSend = async () => {
         // 创建新会话（addChat 会自动激活新会话）
-        addChat({ title: text.slice(0, 20) || 'New Chat' })
+        const newChatId = await addChat(text.slice(0, 20) || 'New Chat')
         // 关闭 Dialog
         setShowDialog(false)
-        // 获取新创建的会话 ID（在 addChat 后 activeChatId 已更新）
-        const newChatId = useChatStore.getState().activeChatId
-        // 发送消息
+        // 发送消息（activeChatId 会在 addChat 后更新，但异步可能还没完成）
+        // 使用 setTimeout 确保状态更新后再发送
         if (newChatId) {
-            addMessage(newChatId, 'user', text)
-            setText("")
+            setTimeout(() => {
+                handleSend()
+            }, 100)
         }
     }
+
+    // 清理定时器（组件卸载时）
+    useEffect(() => {
+        return () => {
+            if (flushTimerRef.current) {
+                clearInterval(flushTimerRef.current)
+            }
+        }
+    }, [])
+
     return (
-        <div className={`flex-col  hover:shadow-md rounded-xl transition-shadow w-[40vw] mb-3.5 shadow-sm border-2 border border-gray-200 ${className}`}>
+        <div className={`flex-col hover:shadow-md rounded-xl transition-shadow w-[40vw] mb-3.5 shadow-sm border-2 border border-gray-200 ${className}`}>
             {/* 隐藏的文件输入框，用于触发文件选择 */}
             <input
                 type="file"
@@ -282,6 +358,13 @@ export const AppChatInput: React.FC<ChatInputProps> = ({ className = '' }) => {
                 multiple
                 className="hidden"
             />
+
+            {/* 错误提示 */}
+            {messagesState.error && (
+                <div className="px-4 pt-2 text-xs text-destructive">
+                    {messagesState.error}
+                </div>
+            )}
 
             {/* 文件列表展示  */}
             {files.length > 0 && (
@@ -324,16 +407,25 @@ export const AppChatInput: React.FC<ChatInputProps> = ({ className = '' }) => {
                     onChange={handleInputChange}
                     placeholder={isRecording ? `录音中 ${recordingTime}s...` : "问问 Gemini..."}
                     rows={1} // 初始一行
-                    className="border-none focus-visible:ring-0 resize-none overflow-hidden min-h-5  "
-
+                    className="border-none focus-visible:ring-0 resize-none overflow-hidden min-h-5"
+                    disabled={isStreaming || isSending}
                 />
 
                 {isStreaming ? (
-                    <Button onClick={handleStop} variant='destructive' size='icon' className="m-[8px]  border-0">
+                    <Button onClick={handleStop} variant='destructive' size='icon' className="m-[8px] border-0">
                         <Square className="size-4"></Square>
                     </Button>) : text.length ? (
-                        <Button onClick={handleSend} variant='outline' className="m-[8px] text-gray-500 hover:text-gray-800 border-0">
-                            <Send />
+                        <Button
+                            onClick={handleSend}
+                            variant='outline'
+                            className="m-[8px] text-gray-500 hover:text-gray-800 border-0"
+                            disabled={isSending || isUploading}
+                        >
+                            {isSending ? (
+                                <span className="animate-spin">⌛</span>
+                            ) : (
+                                <Send />
+                            )}
                         </Button>) : null
                 }
 
@@ -394,7 +486,7 @@ export const AppChatInput: React.FC<ChatInputProps> = ({ className = '' }) => {
                     <Button
                         variant={isRecording ? "destructive" : "outline"}
                         onClick={handleMicClick}
-                        disabled={!isSupported || isStreaming}
+                        disabled={!isSupported || isStreaming || isSending}
                         className="border-0 mt-[8px] relative"
                         title={!isSupported ? '浏览器不支持语音' : isRecording ? '点击停止录音' : '点击开始录音'}
                     >

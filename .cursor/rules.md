@@ -1,12 +1,17 @@
 quick-chat 项目编码行为规范
-1. 禁止提前封装 (Keep It Simple)
-规则: 逻辑必须在 app/api 或 components 中重复出现 3 次以上，才允许抽象到 lib/ 或 hooks/。
+1. 核心原则：
 
-优先直接实现: 在 route.ts 中直接写 Prisma 查询，在组件中直接写 fetch。
+拒绝过度工程（Over-engineering）：不要为了“以后可能存在的扩展性”去写复杂的抽象类、策略模式或多层接口（例如：禁止为了“防备以后换模型”而编写 BaseAIProvider 抽象类）。
 
-禁止过度工程: 不要为了“万一以后要换模型”而编写复杂的 BaseAIProvider 抽象类。
+拒绝过度封装：如果业务代码和 UI 代码严重耦合，可以提取独立的 Hooks 或纯函数。但如果逻辑简单，优先采用直接实现的扁平化代码（KISS 原则：Keep It Simple, Stupid）。
 
-示例 - 正确做法:
+具体行为规范：
+
+数据请求：优先在组件中直接写原生的 fetch。只有当同一个 fetch 逻辑在 3 个以上地方复用时，才提取成独立的 API 函数。
+
+服务端逻辑：在 Next.js 的 route.ts 中，优先直接写 Prisma 查询或调用 AI SDK，不要为了隐藏底层细节而创建类似 DatabaseService 或 StreamManager 这样厚重的服务层类。
+
+UI 与逻辑解耦：如果组件内的事件处理、状态管理超过 50 行，可以将其封装进一个自定义 Hook（如 useChatState），但这个 Hook 内部应该只包含纯粹的、当前的业务逻辑。
 
 TypeScript
 // app/api/chat/route.ts
